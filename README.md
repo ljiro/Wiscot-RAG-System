@@ -1,1 +1,1 @@
-# Wiscot-RAG-System
+# Agentic-GracefulMediaManager
