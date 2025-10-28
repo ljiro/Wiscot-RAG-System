@@ -1,63 +1,38 @@
-// frontend/src/app/api/chat/route.ts
-import { NextResponse } from 'next/server'
+import { consumeStream, convertToModelMessages, streamText, type UIMessage } from "ai"
 
 export const maxDuration = 30
 
 export async function POST(req: Request) {
-  try {
-    const { messages }: { messages: any[] } = await req.json()
-    
-    // Get the last user message
-    const lastUserMessage = messages
-      .filter(msg => msg.role === 'user')
-      .pop()?.content || ""
+  const { messages, context }: { messages: UIMessage[]; context?: string } = await req.json()
 
-    if (!lastUserMessage) {
-      return NextResponse.json({ error: "No message provided" }, { status: 400 })
-    }
+  const prompt = convertToModelMessages(messages)
 
-    console.log('Calling backend with message:', lastUserMessage)
-
-    // Call your FastAPI backend
-    const response = await fetch('http://localhost:8000/api/v1/campaigns/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        message: lastUserMessage,
-        platforms: ['facebook']
-      }),
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error('Backend error:', response.status, errorText)
-      throw new Error(`Backend responded with ${response.status}: ${errorText}`)
-    }
-
-    const data = await response.json()
-    console.log('Backend response:', data)
-
-    // Return in AI SDK format (single message, no streaming)
-    return NextResponse.json([
-      {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: data.content,
+  // Add RAG context to the system message if provided
+  const systemMessage = context
+    ? {
+        role: "system" as const,
+        content: `You are a helpful AI assistant that provides explanations and coding solutions. Use the following context from uploaded documents to answer questions:\n\n${context}\n\nWhen providing code solutions, format them clearly with proper syntax. Be concise and accurate.`,
       }
-    ])
-
-  } catch (error) {
-    console.error('Error in chat route:', error)
-    
-    // Return error message that user will see
-    return NextResponse.json([
-      {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: `❌ Sorry, I encountered an error: ${error instanceof Error ? error.message : 'Unknown error'}. Please check if your backend is running on http://localhost:8000`,
+    : {
+        role: "system" as const,
+        content:
+          "You are a helpful AI assistant that provides explanations and coding solutions. Format code clearly with proper syntax.",
       }
-    ])
-  }
+
+  const result = streamText({
+    model: "openai/gpt-5-mini",
+    messages: [systemMessage, ...prompt],
+    abortSignal: req.signal,
+    maxOutputTokens: 2000,
+    temperature: 0.7,
+  })
+
+  return result.toUIMessageStreamResponse({
+    onFinish: async ({ isAborted }) => {
+      if (isAborted) {
+        console.log("[v0] Chat request aborted")
+      }
+    },
+    consumeSseStream: consumeStream,
+  })
 }
