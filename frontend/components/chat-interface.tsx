@@ -1,10 +1,7 @@
 "use client"
 
 import type React from "react"
-
 import { useState, useRef, useEffect } from "react"
-import { useChat } from "@ai-sdk/react"
-import { DefaultChatTransport } from "ai"
 import { MessageBubble } from "./message-bubble"
 import { Logo } from "./logo"
 import { Button } from "@/components/ui/button"
@@ -12,22 +9,28 @@ import { Textarea } from "@/components/ui/textarea"
 import { Send, Paperclip, Loader2, X } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 
+interface Message {
+  id: string
+  role: "user" | "assistant"
+  content: string
+  timestamp: Date
+  type?: "text" | "search" | "sources"
+}
+
 export function ChatInterface() {
   const [pdfContext, setPdfContext] = useState<string>("")
   const [uploadedFile, setUploadedFile] = useState<string | null>(null)
   const [isUploading, setIsUploading] = useState(false)
   const [input, setInput] = useState("")
+  const [messages, setMessages] = useState<Message[]>([])
+  const [isLoading, setIsLoading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { toast } = useToast()
 
-  const { messages, sendMessage, status } = useChat({
-    transport: new DefaultChatTransport({
-      api: "/api/chat",
-      body: { context: pdfContext },
-    }),
-  })
+  const RASA_API_URL = process.env.NEXT_PUBLIC_RASA_API_URL || "http://localhost:5005"
+  const RASA_WEBHOOK_ENDPOINT = "/webhooks/rest/webhook"
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -37,14 +40,186 @@ export function ChatInterface() {
     scrollToBottom()
   }, [messages])
 
+  const parseRasaResponse = (text: string): Message[] => {
+    const messages: Message[] = []
+    const now = Date.now()
+
+    // Split the response into logical parts
+    const lines = text.split('\n').filter(line => line.trim())
+    
+    let currentContent = ""
+    let currentType: "text" | "search" | "sources" = "text"
+
+    for (const line of lines) {
+      if (line.includes('🔍 Searching my knowledge base') || line.includes('Searching my knowledge base')) {
+        // If we have accumulated content, push it as a message
+        if (currentContent.trim()) {
+          messages.push({
+            id: `msg-${now}-${messages.length}`,
+            role: "assistant",
+            content: currentContent.trim(),
+            type: currentType
+          })
+          currentContent = ""
+        }
+        // Add search status as a separate message
+        messages.push({
+          id: `search-${now}`,
+          role: "assistant",
+          content: line.trim(),
+          type: "search"
+        })
+      }
+      else if (line.includes('📚 Sources:') || line.includes('Sources:')) {
+        // If we have accumulated content, push it as a message
+        if (currentContent.trim()) {
+          messages.push({
+            id: `msg-${now}-${messages.length}`,
+            role: "assistant",
+            content: currentContent.trim(),
+            type: currentType
+          })
+          currentContent = ""
+        }
+        // Add sources as a separate message
+        messages.push({
+          id: `sources-${now}`,
+          role: "assistant",
+          content: line.trim(),
+          type: "sources"
+        })
+      }
+      else if (line.includes('Answer:') || line.includes('Answer (')) {
+        // If we have accumulated content (like the greeting), push it
+        if (currentContent.trim()) {
+          messages.push({
+            id: `msg-${now}-${messages.length}`,
+            role: "assistant",
+            content: currentContent.trim(),
+            type: currentType
+          })
+          currentContent = ""
+        }
+        // Start accumulating answer content
+        currentContent = line.replace(/Answer\s*\([^)]+\):\s*/, '').trim()
+        currentType = "text"
+      }
+      else {
+        // Accumulate regular content
+        currentContent += (currentContent ? '\n' : '') + line
+      }
+    }
+
+    // Don't forget the last accumulated content
+    if (currentContent.trim()) {
+      messages.push({
+        id: `msg-${now}-${messages.length}`,
+        role: "assistant",
+        content: currentContent.trim(),
+        type: currentType
+      })
+    }
+
+    // If no structured messages were found, return the original text as one message
+    if (messages.length === 0) {
+      return [{
+        id: `msg-${now}`,
+        role: "assistant",
+        content: text,
+        type: "text"
+      }]
+    }
+
+    return messages
+  }
+
+  const sendMessageToRasa = async (message: string) => {
+    setIsLoading(true)
+    
+    try {
+      // Add user message to chat
+      const userMessage: Message = {
+        id: Date.now().toString(),
+        role: "user",
+        content: message,
+        timestamp: new Date()
+      }
+      
+      setMessages(prev => [...prev, userMessage])
+
+      const requestBody = {
+        sender: "user",
+        message: message,
+        metadata: pdfContext ? { context: pdfContext } : undefined
+      }
+
+      const response = await fetch(`${RASA_API_URL}${RASA_WEBHOOK_ENDPOINT}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Rasa API responded with status: ${response.status}`)
+      }
+
+      const rasaResponse = await response.json()
+
+      if (rasaResponse && rasaResponse.length > 0) {
+        rasaResponse.forEach((rasaMessage: any, index: number) => {
+          if (rasaMessage.text) {
+            const parsedMessages = parseRasaResponse(rasaMessage.text)
+            parsedMessages.forEach((parsedMessage, msgIndex) => {
+              setMessages(prev => [...prev, {
+                ...parsedMessage,
+                id: `rasa-${Date.now()}-${index}-${msgIndex}`,
+                timestamp: new Date()
+              }])
+            })
+          }
+        })
+      } else {
+        const fallbackMessage: Message = {
+          id: `rasa-${Date.now()}`,
+          role: "assistant",
+          content: "I received your message but didn't get a proper response.",
+          timestamp: new Date(),
+          type: "text"
+        }
+        setMessages(prev => [...prev, fallbackMessage])
+      }
+    } catch (error) {
+      console.error("Error sending message to Rasa:", error)
+      
+      const errorMessage: Message = {
+        id: `error-${Date.now()}`,
+        role: "assistant",
+        content: "Sorry, I'm having trouble connecting to the assistant. Please try again.",
+        timestamp: new Date(),
+        type: "text"
+      }
+      setMessages(prev => [...prev, errorMessage])
+      
+      toast({
+        title: "Connection error",
+        description: "Failed to connect to the assistant",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Rest of your existing functions remain the same...
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!input.trim() || status === "in_progress") return
+    if (!input.trim() || isLoading) return
 
-    sendMessage({ text: input })
+    sendMessageToRasa(input)
     setInput("")
 
-    // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto"
     }
@@ -112,8 +287,6 @@ export function ChatInterface() {
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value)
-
-    // Auto-resize textarea
     e.target.style.height = "auto"
     e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`
   }
@@ -151,9 +324,14 @@ export function ChatInterface() {
           ) : (
             <>
               {messages.map((message) => (
-                <MessageBubble key={message.id} role={message.role} content={message.parts} />
+                <MessageBubble 
+                  key={message.id} 
+                  role={message.role} 
+                  content={[{ type: 'text', text: message.content }]} 
+                  messageType={message.type}
+                />
               ))}
-              {status === "in_progress" && (
+              {isLoading && (
                 <div className="flex gap-3 mb-6">
                   <div className="flex-shrink-0 w-8 h-8 rounded-full bg-muted flex items-center justify-center">
                     <Logo className="h-5 w-5 text-primary" />
@@ -178,7 +356,7 @@ export function ChatInterface() {
               variant="ghost"
               size="icon"
               onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading || status === "in_progress"}
+              disabled={isUploading || isLoading}
               className="flex-shrink-0 h-9 w-9"
             >
               {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
@@ -195,12 +373,12 @@ export function ChatInterface() {
               }}
               placeholder="Message Wiscot AI..."
               className="flex-1 min-h-[36px] max-h-[120px] resize-none text-sm py-2"
-              disabled={status === "in_progress"}
+              disabled={isLoading}
             />
             <Button
               type="submit"
               size="icon"
-              disabled={!input.trim() || status === "in_progress"}
+              disabled={!input.trim() || isLoading}
               className="flex-shrink-0 h-9 w-9"
             >
               <Send className="h-4 w-4" />
