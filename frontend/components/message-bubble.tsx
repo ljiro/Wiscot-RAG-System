@@ -9,6 +9,23 @@ interface MessageBubbleProps {
 }
 
 export function MessageBubble({ role, content, messageType }: MessageBubbleProps) {
+  // Function to parse bold text within any content
+  const parseBoldText = (text: string) => {
+    const parts = text.split(/(\*\*.*?\*\*)/g);
+    
+    return parts.map((part, index) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        const boldText = part.slice(2, -2);
+        return (
+          <strong key={index} className="font-semibold text-gray-900">
+            {boldText}
+          </strong>
+        );
+      }
+      return <span key={index}>{part}</span>;
+    });
+  }
+
   // Function to parse content with proper formatting
   const formatContent = (text: string) => {
     const lines = text.split('\n');
@@ -34,7 +51,7 @@ export function MessageBubble({ role, content, messageType }: MessageBubbleProps
           <div key={index} className="flex items-start mb-2 ml-4">
             <span className="text-gray-600 mr-3 mt-0.5 flex-shrink-0">•</span>
             <span className="text-gray-700 flex-1 leading-relaxed">
-              {trimmedLine.slice(1).trim()}
+              {parseBoldText(trimmedLine.slice(1).trim())}
             </span>
           </div>
         );
@@ -50,7 +67,7 @@ export function MessageBubble({ role, content, messageType }: MessageBubbleProps
           <div key={index} className="flex items-start mb-1 ml-12">
             <span className="text-gray-500 mr-3 mt-0.5 flex-shrink-0">-</span>
             <span className="text-gray-600 flex-1 leading-relaxed text-sm">
-              {nestedContent}
+              {parseBoldText(nestedContent)}
             </span>
           </div>
         );
@@ -66,7 +83,7 @@ export function MessageBubble({ role, content, messageType }: MessageBubbleProps
                 {numberMatch[1]}.
               </span>
               <span className="text-gray-700 flex-1 ml-2 leading-relaxed">
-                {numberMatch[2]}
+                {parseBoldText(numberMatch[2])}
               </span>
             </div>
           );
@@ -84,7 +101,7 @@ export function MessageBubble({ role, content, messageType }: MessageBubbleProps
         if (isParagraph) {
           return (
             <div key={index} className="mb-3 text-gray-700 leading-relaxed">
-              {trimmedLine}
+              {parseBoldText(trimmedLine)}
             </div>
           );
         }
