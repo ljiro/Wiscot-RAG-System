@@ -29,24 +29,55 @@ export function MessageBubble({ role, content, messageType }: MessageBubbleProps
   // Function to parse content with proper formatting
   const formatContent = (text: string) => {
     const lines = text.split('\n');
+    let inBoldSection = false;
     
     return lines.map((line, index) => {
       const trimmedLine = line.trim();
       
-      // Check for bold text (main points) - **1. Public Utility Jeepneys (PUJs) Routes**
-      const boldMatch = trimmedLine.match(/^\*\*(.*)\*\*$/);
-      if (boldMatch) {
+      // Check for numbered sections (main topics)
+      const numberedMatch = trimmedLine.match(/^(\d+)\.\s+(.*)/);
+      if (numberedMatch) {
+        inBoldSection = false;
+        const isBold = numberedMatch[2].includes('**');
         return (
-          <div key={index} className="mb-3 mt-4 first:mt-0">
-            <strong className="font-semibold text-gray-900 text-[15px] leading-relaxed">
-              {boldMatch[1]}
+          <div key={index} className="mb-2 mt-4 first:mt-0">
+            <span className="text-gray-600 font-medium mr-2">
+              {numberedMatch[1]}.
+            </span>
+            <span className="text-gray-900 font-semibold text-[15px] leading-relaxed">
+              {isBold ? parseBoldText(numberedMatch[2]) : numberedMatch[2]}
+            </span>
+          </div>
+        );
+      }
+      
+      // Check for bold text in bullet points (sub-topics) - remove the bullet and make it a heading
+      const boldBulletMatch = trimmedLine.match(/^•\s+\*\*(.*)\*\*\s*$/);
+      if (boldBulletMatch) {
+        inBoldSection = true;
+        return (
+          <div key={index} className="mb-2 mt-3 ml-4">
+            <strong className="font-semibold text-gray-900 text-[14px] leading-relaxed">
+              {boldBulletMatch[1]}
             </strong>
           </div>
         );
       }
       
-      // Check for main bullet points (•)
-      else if (trimmedLine.startsWith('•') && !trimmedLine.startsWith('• •')) {
+      // Check for regular bullet points that are in a bold section
+      else if (trimmedLine.startsWith('•') && inBoldSection) {
+        return (
+          <div key={index} className="flex items-start mb-2 ml-8">
+            <span className="text-gray-600 mr-3 mt-0.5 flex-shrink-0">•</span>
+            <span className="text-gray-700 flex-1 leading-relaxed">
+              {parseBoldText(trimmedLine.slice(1).trim())}
+            </span>
+          </div>
+        );
+      }
+      
+      // Check for regular bullet points that are NOT in a bold section
+      else if (trimmedLine.startsWith('•')) {
         return (
           <div key={index} className="flex items-start mb-2 ml-4">
             <span className="text-gray-600 mr-3 mt-0.5 flex-shrink-0">•</span>
@@ -73,30 +104,13 @@ export function MessageBubble({ role, content, messageType }: MessageBubbleProps
         );
       }
       
-      // Check for numbered lists (1., 2., 3., etc.)
-      else if (trimmedLine.match(/^\d+\./)) {
-        const numberMatch = trimmedLine.match(/^(\d+)\.\s*(.*)/);
-        if (numberMatch) {
-          return (
-            <div key={index} className="flex items-start mb-2">
-              <span className="text-gray-600 font-medium min-w-6 mt-0.5">
-                {numberMatch[1]}.
-              </span>
-              <span className="text-gray-700 flex-1 ml-2 leading-relaxed">
-                {parseBoldText(numberMatch[2])}
-              </span>
-            </div>
-          );
-        }
-      }
-      
       // Regular text with proper spacing (non-empty lines)
       else if (trimmedLine) {
+        inBoldSection = false;
         // Check if this looks like a paragraph (not a list item)
         const isParagraph = !trimmedLine.startsWith('•') && 
                            !trimmedLine.startsWith('-') && 
-                           !trimmedLine.match(/^\d+\./) &&
-                           !boldMatch;
+                           !trimmedLine.match(/^\d+\./);
         
         if (isParagraph) {
           return (
@@ -109,9 +123,12 @@ export function MessageBubble({ role, content, messageType }: MessageBubbleProps
       
       // Empty line (spacing) - but only add spacing if it's meaningful
       else if (index > 0 && index < lines.length - 1 && lines[index - 1].trim() && lines[index + 1].trim()) {
+        inBoldSection = false;
         return <div key={index} className="h-3" />;
       }
       
+      // Reset the flag for any other case
+      inBoldSection = false;
       return null;
     }).filter(Boolean); // Remove null values
   }
